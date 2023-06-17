@@ -37,6 +37,7 @@
 
       in rec {
         devShells.default = pkgs.mkShell {
+          name = "aoc";
           nativeBuildInputs = with pkgs; [ zigpkgs.master ];
           # test dependencies
           buildInputs = with pkgs; [ zls ];

@@ -40,7 +40,7 @@
           name = "aoc";
           nativeBuildInputs = with pkgs; [ zigpkgs.master ];
           # test dependencies
-          buildInputs = with pkgs; [ zls ];
+          buildInputs = with pkgs; [ zls xdot graphviz ];
         };
 
         # For compatibility with older versions of the `nix` binary

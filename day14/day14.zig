@@ -9,7 +9,7 @@ fn parsePoint(s: []const u8) Point {
 
 const BoardMaskInt = usize;
 
-const is_part2 = true;
+const is_part2 = false;
 
 const is_real_input = true;
 
@@ -20,15 +20,12 @@ const floor_position = if (!is_real_input) 9 + 2 else 173 + 2;
 const objs_hz_span = if (!is_real_input) 9 else 56;
 const objs_vt_span = if (!is_real_input) 5 else 160;
 
-// make sure it's evenly divisible by 64 :)
-const board_height = if (!is_real_input) floor_position + (floor_position / 2) else std.mem.alignForward(floor_position, @bitSizeOf(BoardMaskInt));
-const board_width = 2 * board_height;
+const board_height = floor_position + (floor_position / 2);
+const board_width = objs_hz_span + 1 + 2;
 
-const board_left_corner = Point{ if (!is_real_input) 494 else 449, 0 }; //Point{ 300, 0 };
+const board_left_corner = Point{ (if (!is_real_input) 494 else 449) - 1, 0 }; //Point{ 300, 0 };
 //
-const orig_drop_point = Point{ 500, 0 } - Point{ board_left_corner[0], 0 };
-const obj_bias_to_center = Point{ board_width / 2 - orig_drop_point[0], 0 };
-const drop_point = Point{ board_width / 2, 0 };
+const drop_point = Point{ 500, 0 } - Point{ board_left_corner[0], 0 };
 
 const Board = std.bit_set.ArrayBitSet(BoardMaskInt, board_width * board_height);
 
@@ -60,6 +57,8 @@ fn waitEnter() void {
 const Part2Sim = struct {
     blocked: Board = Board.initEmpty(),
     settled_count: usize = 0,
+    left_height: usize = 0,
+    right_height: usize = 0,
 
     fn isBlocked(sim: *const Part2Sim, pos: Point) bool {
         return sim.blocked.isSet(index(pos));
@@ -82,12 +81,46 @@ const Part2Sim = struct {
 
         sim.drop(pos + Point{ 0, 1 });
 
-        sim.drop(pos + Point{ 0, 1 } - Point{ 1, 0 });
+        if (pos[0] != 0) {
+            sim.drop(pos + Point{ 0, 1 } - Point{ 1, 0 });
+        } else {
+            sim.left_height += 1;
+        }
 
-        sim.drop(pos + Point{ 1, 1 });
+        if (pos[0] != board_width - 1) {
+            sim.drop(pos + Point{ 1, 1 });
+        } else {
+            sim.right_height += 1;
+        }
 
         sim.settled_count += 1;
+        // ensure we don't visit it again.
         sim.blocked.set(pos_index);
+    }
+
+    fn calcCount(sim: *const Part2Sim) usize {
+
+        // calculate the missed amount by the simulation.
+        // The big triangle has base 2 * height.
+        // It is *not* centered over the box, although the box *contains* the center.
+
+        const dist_start_to_right = board_width - drop_point[0] - 1;
+        const dist_start_to_left = drop_point[0];
+
+        const half_base = (floor_position);
+
+        const left_triangle_base = half_base - dist_start_to_left - 1;
+        const right_triangle_base = half_base - dist_start_to_right - 1;
+
+        // I'm pretty sure that `left_height` and `right_height` *can* be precomputed
+        // but I'm only interested in doing enough geometry to cut the triangles.
+        // The heights are _very_ cheap to compute.
+        const left_triangle_area = left_triangle_base * sim.left_height / 2;
+        const right_triangle_area = right_triangle_base * sim.right_height / 2;
+
+        const missed = left_triangle_area + right_triangle_area;
+
+        return missed + sim.settled_count;
     }
 };
 
@@ -177,9 +210,9 @@ fn parseFile(board: *Board) !void {
         if (line.len == 0) break;
 
         var point_srcs = std.mem.tokenizeSequence(u8, line, " -> ");
-        var start = parsePoint(point_srcs.next().?) - board_left_corner + obj_bias_to_center;
+        var start = parsePoint(point_srcs.next().?) - board_left_corner;
         while (point_srcs.next()) |v_end| {
-            const end = parsePoint(v_end) - board_left_corner + obj_bias_to_center;
+            const end = parsePoint(v_end) - board_left_corner;
             const lt = start < end;
             const min = @select(usize, lt, start, end);
             const max = @select(usize, lt, end, start);
@@ -209,11 +242,11 @@ pub fn main() !void {
     try parseFile(&sim.blocked);
 
     if (will_paint_table) {
-        if (is_part2) {
-            for (0..board_width) |x| {
-                sim.blocked.set(index(.{ x, floor_position }));
-            }
-        }
+        // if (is_part2) {
+        //     for (0..board_width) |x| {
+        //         sim.blocked.set(index(.{ x, floor_position }));
+        //     }
+        // }
         drawBoard(&sim.blocked);
     }
 
@@ -223,5 +256,5 @@ pub fn main() !void {
         finishBoard();
     }
 
-    std.log.debug("sand count: {}", .{sim.settled_count});
+    std.log.debug("sand count: {}", .{if (is_part2) sim.calcCount() else sim.settled_count});
 }

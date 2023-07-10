@@ -9,7 +9,7 @@ fn parsePoint(s: []const u8) Point {
 
 const BoardMaskInt = usize;
 
-const is_part2 = false;
+const is_part2 = true;
 
 const is_real_input = true;
 
@@ -20,7 +20,7 @@ const floor_position = if (!is_real_input) 9 + 2 else 173 + 2;
 const objs_hz_span = if (!is_real_input) 9 else 56;
 const objs_vt_span = if (!is_real_input) 5 else 160;
 
-const board_height = floor_position + (floor_position / 2);
+const board_height = floor_position;
 const board_width = objs_hz_span + 1 + 2;
 
 const board_left_corner = Point{ (if (!is_real_input) 494 else 449) - 1, 0 }; //Point{ 300, 0 };
@@ -35,7 +35,7 @@ fn index(pos: Point) usize {
 }
 
 fn finishBoard() void {
-    std.debug.print("\x1b[{};1H\x1b[m\x1b[?25h\r", .{board_height});
+    std.debug.print("\x1b[{};1H\x1b[m\x1b[?25h\r", .{floor_position});
 }
 
 fn drawBoard(board: *const Board) void {
@@ -54,51 +54,84 @@ fn waitEnter() void {
     std.debug.print("\x1b[u", .{});
 }
 
-const Part2Sim = struct {
-    blocked: Board = Board.initEmpty(),
+const Part2 = struct {
+    comptime {
+        std.debug.assert(board_width <= @bitSizeOf(usize));
+    }
+
+    fn drawLane(lane: Lane, comptime chs: []const u8) void {
+        var rem_mask = lane;
+
+        var last_x: usize = 0;
+
+        while (rem_mask != 0) {
+            const x = @ctz(rem_mask);
+            rem_mask &= rem_mask - 1;
+            if (x - last_x >= 2) {
+                std.debug.print("\x1b[{}C", .{x - last_x - 1});
+            }
+            std.debug.print(chs, .{});
+            last_x = x;
+        }
+    }
+
+    fn drawFull(sim: *const Part2) void {
+        std.debug.print("\x1b[H\x1b[J\x1b[?25l\x1b[38;5;15m", .{});
+
+        for (sim.blocked, 0..) |mask, y| {
+            std.debug.print("\x1b[{};1H", .{y + 1});
+            drawLane(mask, "\x1b[38;5;7m@");
+            std.debug.print("\n", .{});
+        }
+    }
+
+    const Lane = std.meta.Int(.unsigned, board_width);
+    const ShiftInt = std.math.Log2Int(Lane);
+
+    blocked: [floor_position]Lane = [_]Lane{0} ** floor_position,
     settled_count: usize = 0,
     left_height: usize = 0,
     right_height: usize = 0,
 
-    fn isBlocked(sim: *const Part2Sim, pos: Point) bool {
-        return sim.blocked.isSet(index(pos));
+    fn set(sim: *Part2, pos: Point) void {
+        sim.blocked[pos[1]] |= @as(Lane, 1) << @intCast(ShiftInt, pos[0]);
     }
 
-    fn drop(sim: *Part2Sim, pos: Point) void {
-        if (pos[1] >= floor_position) return;
-
-        const pos_index = index(pos);
-
-        if (sim.blocked.isSet(pos_index)) return;
-
-        if (will_paint_table) {
-            std.debug.print(
-                "\x1b[{};{}H\x1b[38;5;11m+",
-                .{ pos[1] + 1, pos[0] + 1 },
-            );
-            std.time.sleep(10 * std.time.ns_per_ms);
-        }
-
-        sim.drop(pos + Point{ 0, 1 });
-
-        if (pos[0] != 0) {
-            sim.drop(pos + Point{ 0, 1 } - Point{ 1, 0 });
-        } else {
-            sim.left_height += 1;
-        }
-
-        if (pos[0] != board_width - 1) {
-            sim.drop(pos + Point{ 1, 1 });
-        } else {
-            sim.right_height += 1;
-        }
-
+    // The last solution visited every `y` value only once, and by doing that,
+    // I realized that if a grain of sand gets to a place, it will (eventually)
+    // settle. The propagation is always the same and the condition to
+    // propagate is that there was a grain there and, for each neighbor to
+    // propagate, that it is not blocked by a wall. With this premise we can
+    // construct just a single lane and update it on each iteration.
+    fn drop(sim: *Part2, pos: Point) void {
+        std.debug.assert(pos[1] == 0);
+        var lane: Lane = @as(Lane, 1) << @intCast(ShiftInt, pos[0]);
         sim.settled_count += 1;
-        // ensure we don't visit it again.
-        sim.blocked.set(pos_index);
+        sim.right_height += @truncate(u1, lane >> (@bitSizeOf(Lane) - 1));
+        sim.left_height += @truncate(u1, lane);
+
+        if (will_paint_table) std.debug.print("\x1b[H", .{});
+
+        for (sim.blocked[1..]) |blocked_mask| {
+            if (will_paint_table) {
+                drawLane(lane, "\x1b[38;5;11m+");
+                std.debug.print("\x1b[B\r", .{});
+                std.time.sleep(10 * std.time.ns_per_ms);
+            }
+
+            // down, down left, down right.
+            const propagation_targets = lane | (lane << 1) | (lane >> 1);
+
+            const next_lane = propagation_targets & ~blocked_mask;
+
+            lane = next_lane;
+            sim.settled_count += @popCount(lane);
+            sim.right_height += @truncate(u1, lane >> (@bitSizeOf(Lane) - 1));
+            sim.left_height += @truncate(u1, lane);
+        }
     }
 
-    fn calcCount(sim: *const Part2Sim) usize {
+    fn calcCount(sim: *const Part2) usize {
 
         // calculate the missed amount by the simulation.
         // The big triangle has base 2 * height.
@@ -188,7 +221,7 @@ const Part1Sim = struct {
     }
 };
 
-fn parseFile(board: *Board) !void {
+fn parseFile(board: anytype) !void {
     const file = try std.fs.cwd().openFile(if (!is_real_input)
         "test.txt"
     else
@@ -221,14 +254,22 @@ fn parseFile(board: *Board) !void {
                 const x = start[0];
 
                 for (min[1]..max[1] + 1) |y| {
-                    board.set(index(.{ x, y }));
+                    if (is_part2) {
+                        board.set(.{ x, y });
+                    } else {
+                        board.set(index(.{ x, y }));
+                    }
                 }
             } else {
                 std.debug.assert(start[1] == end[1]);
                 // horizontal
                 const y = start[1];
                 for (min[0]..max[0] + 1) |x| {
-                    board.set(index(.{ x, y }));
+                    if (is_part2) {
+                        board.set(.{ x, y });
+                    } else {
+                        board.set(index(.{ x, y }));
+                    }
                 }
             }
             start = end;
@@ -237,9 +278,9 @@ fn parseFile(board: *Board) !void {
 }
 
 pub fn main() !void {
-    var sim = if (is_part2) Part2Sim{} else Part1Sim{};
+    var sim = if (is_part2) Part2{} else Part1Sim{};
 
-    try parseFile(&sim.blocked);
+    try parseFile(if (is_part2) &sim else &sim.blocked);
 
     if (will_paint_table) {
         // if (is_part2) {
@@ -247,7 +288,11 @@ pub fn main() !void {
         //         sim.blocked.set(index(.{ x, floor_position }));
         //     }
         // }
-        drawBoard(&sim.blocked);
+        if (is_part2) {
+            sim.drawFull();
+        } else {
+            drawBoard(&sim.blocked);
+        }
     }
 
     sim.drop(drop_point);

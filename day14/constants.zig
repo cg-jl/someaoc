@@ -1,7 +1,8 @@
 pub const Point = @Vector(2, usize);
+const is_debug = @import("builtin").mode == .Debug;
 
 pub const is_real_input = true;
-pub const will_paint_table = true;
+pub const will_paint_table = true and is_debug;
 
 pub const input_file_name = if (is_real_input) "input.txt" else "test.txt";
 

@@ -105,10 +105,10 @@ fn drop(available: AvailableTable, pos: constants.Point) usize {
         left_height += @truncate(u1, lane);
     }
 
-    return addMissedFromBoundaryCut(left_height, right_height, settled_count);
+    return settled_count + missedFromBoundaryCut(left_height, right_height);
 }
 
-fn addMissedFromBoundaryCut(left_height: usize, right_height: usize, counted_by_simulation: usize) usize {
+fn missedFromBoundaryCut(left_height: usize, right_height: usize) usize {
 
     // calculate the missed amount by the simulation.
     // The big triangle has base 2 * height.
@@ -126,6 +126,8 @@ fn addMissedFromBoundaryCut(left_height: usize, right_height: usize, counted_by_
     // distances to the center on that input. That made things confusing, so be
     // careful!
 
+    // This (-1) looks arbitrary; what it does is exclude the peak from the
+    // distances.
     const dist_start_to_right = constants.board_width - constants.drop_point[0] - 1;
     const dist_start_to_left = constants.drop_point[0];
 
@@ -142,23 +144,80 @@ fn addMissedFromBoundaryCut(left_height: usize, right_height: usize, counted_by_
 
     const missed = left_triangle_area + right_triangle_area;
 
-    return missed + counted_by_simulation;
+    return missed;
 }
+
+fn isBench() bool {
+    return std.os.argv.len == 2 and std.mem.eql(u8, std.mem.span(std.os.argv[1]), "bench");
+}
+
+const mode = @import("builtin").mode;
+
+pub const std_options = struct {
+    pub const log_level = if (mode == .Debug) .debug else .info;
+};
 
 pub fn main() !void {
     var table = full_table;
-
     try parse.loadFile(Loader{ .table = &table }, constants.input_file_name);
 
-    if (constants.will_paint_table) {
-        drawTable(&table);
+    if (isBench()) {
+        if (mode == .Debug) {
+            std.log.err("Use .ReleaseFast, .ReleaseSmall or .ReleaseSafe to benchmark!", .{});
+            return;
+        }
+
+        const max_time = 10 * std.time.ns_per_s;
+        const sample_count = 10_000;
+
+        var sample_buf: [sample_count]usize = undefined;
+        var accum_time: usize = 0;
+
+        var timer = try std.time.Timer.start();
+        const num_samples = for (&sample_buf, 0..) |*sample, sample_index| {
+            if (accum_time >= max_time) break sample_index;
+
+            timer.reset();
+            std.mem.doNotOptimizeAway(drop(table, constants.drop_point));
+            sample.* = timer.read();
+
+            accum_time += sample.*;
+        } else sample_buf.len;
+
+        const avg: usize = accum_time / num_samples;
+        var variance: usize = 0;
+        const samples = sample_buf[0..num_samples];
+
+        for (samples) |sample| {
+            const dist = if (avg > sample) avg - sample else sample - avg;
+            variance += dist * dist;
+        }
+
+        const stddev = std.math.sqrt(variance / num_samples);
+
+        const median = samples[num_samples / 2];
+
+        std.log.info(
+            "avg: {} median: {} stddev: {} run count: {}",
+            .{
+                std.fmt.fmtDuration(avg),
+                std.fmt.fmtDuration(median),
+                std.fmt.fmtDuration(stddev),
+                num_samples,
+            },
+        );
+    } else {
+        if (std.os.argv.len == 0) {
+            if (constants.will_paint_table) {
+                drawTable(&table);
+            }
+
+            const settled_count = drop(table, constants.drop_point);
+
+            if (constants.will_paint_table) {
+                interactive.finishBoard();
+            }
+            std.log.info("settled count: {}", .{settled_count});
+        }
     }
-
-    const settled_count = drop(table, constants.drop_point);
-
-    if (constants.will_paint_table) {
-        interactive.finishBoard();
-    }
-
-    std.log.info("settled count: {}", .{settled_count});
 }
